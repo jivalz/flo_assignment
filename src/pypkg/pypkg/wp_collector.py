@@ -1,66 +1,90 @@
 #!/usr/bin/env python3
 import math
-import os 
-import csv 
+import os
+import csv
 import rclpy
 from rclpy.node import Node
-from nav_msgs.msg import Odometry   
+from nav_msgs.msg import Odometry
 
-out = os.path.expanduser("~/assignment/src/pypkg/csv/waypoint.csv")
+DEFAULT_DIR = os.path.expanduser("~/assignment/src/nav/waypoints")
 
-class wpcollector(Node):
+def get_next_waypoint_file(output_dir: str) -> str:
+    os.makedirs(output_dir, exist_ok=True)
+    index = 1
+    while True:
+        filepath = os.path.join(output_dir, f"waypoint{index}.csv")
+        if not os.path.exists(filepath):
+            return filepath
+        index += 1
+
+class WaypointCollector(Node):
     def __init__(self):
         super().__init__('waypoint_collector')
-        self.declare_parameter("output_file", out)
-        self.declare_parameter("min_distance",0.1)
-        self.output_file = self.get_parameter("output_file").value
+        self.declare_parameter("output_dir", DEFAULT_DIR)
+        self.declare_parameter("file_name", "")
+        self.declare_parameter("min_distance", 0.1)
+
+        output_dir = os.path.expanduser(self.get_parameter("output_dir").value)
+        file_name = self.get_parameter("file_name").value.strip()
         self.min_distance = self.get_parameter("min_distance").value
-        os.makedirs(os.path.dirname(self.output_file),exist_ok = True)
-        self.file = open(self.output_file, 'w',newline='')
+
+        if file_name:
+            if not file_name.endswith('.csv'):
+                file_name += '.csv'
+            os.makedirs(output_dir, exist_ok=True)
+            self.output_file = os.path.join(output_dir, file_name)
+        else:
+            self.output_file = get_next_waypoint_file(output_dir)
+
+        self.file = open(self.output_file, 'w', newline='')
         self.writer = csv.writer(self.file)
-        self.writer.writerow(["id","x","y"])
-        
+        self.writer.writerow(["id", "x", "y"])
+
         self.prev_x = None
         self.prev_y = None
-        self.wp_count = 0 
-        
-        self.create_subscription(Odometry, '/odom', self.odom_cb, 10)
+        self.wp_count = 0
 
-    def odom_cb(self, msg:Odometry):
+        self.create_subscription(Odometry, '/odom', self.odom_cb, 10)
+        self.get_logger().info(f"Recording waypoints to: {self.output_file}")
+        self.get_logger().info(f"Waypoint spacing threshold: {self.min_distance}m")
+
+    def odom_cb(self, msg: Odometry):
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
 
         if self.prev_x is None or self.prev_y is None:
-            self.record(x,y)
+            self.record(x, y)
             return
-        s = math.sqrt((x - self.prev_x)**2 + (y-self.prev_y)**2 )
-        if s>=self.min_distance:
+
+        dist = math.hypot(x - self.prev_x, y - self.prev_y)
+        if dist >= self.min_distance:
             self.record(x, y)
 
-    def record(self, x, y):
+    def record(self, x: float, y: float):
         self.writer.writerow([self.wp_count, round(x, 4), round(y, 4)])
         self.file.flush()
+        self.get_logger().info(f"Recorded Waypoint {self.wp_count}: ({x:.3f}, {y:.3f})")
         self.prev_x = x
         self.prev_y = y
         self.wp_count += 1
         #self.get_logger().info(f"Waypoint {self.wp_count:3d}: ({x:.3f}, {y:.3f})")
 
-    def __del__(self):
+    def close(self):
         if hasattr(self, 'file') and not self.file.closed:
             self.file.close()
-            print(f"\n{self.wp_count} waypoints saved to {self.output_file}")
-            
-def main():
-    rclpy.init()
-    node = wpcollector()
+            self.get_logger().info(f"Saved {self.wp_count} waypoints to {self.output_file}")
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = WaypointCollector()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
-        node.__del__()
+        node.close()
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 if __name__ == "__main__":
     main()

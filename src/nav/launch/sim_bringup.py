@@ -27,7 +27,7 @@ def generate_launch_description():
         name='rviz2',
         arguments=[
             '-d',
-            [os.path.join(get_package_share_directory('nav'), 'config', 'sim.rviz')]
+            [os.path.join(get_package_share_directory('nav'), 'config', 'mppi.rviz')]
         ],
         parameters=[{
             'use_sim_time': True
@@ -67,7 +67,7 @@ def generate_launch_description():
 
     nodes = []
     nodes.append(turtlebot3_gazebo)
-    nodes.append(pure_pursuit_tracker)
+    #nodes.append(pure_pursuit_tracker)
     nodes.append(rviz)
 
     return LaunchDescription(nodes)
