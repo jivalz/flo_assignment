@@ -228,7 +228,7 @@ class mppi:
 
 class mppinode(Node):
     def __init__(self):
-        super().__init__('mppi_node')
+        super().__init__('mppi_node1')
         
         # VERY IMPORTANT: Enable sim time so our timestamps match Gazebo and RViz!
         self.set_parameters([rclpy.parameter.Parameter('use_sim_time', rclpy.Parameter.Type.BOOL, True)])
@@ -240,7 +240,7 @@ class mppinode(Node):
         self.declare_parameter('r_safe', 0.35)
         wp_file = self.get_parameter('waypoint_file').value
         if not wp_file:
-            wp_file = os.path.expanduser('~/assignment/src/nav/waypoints/waypoint4.csv')
+            wp_file = os.path.expanduser('~/assignment/src/nav/waypoints/waypoint5.csv')
             # if not os.path.exists(wp_file):
             #     wp_file = os.path.expanduser('~/assignment/src/nav/waypoints/waypoint4.csv')
 
@@ -272,11 +272,11 @@ class mppinode(Node):
             sig_v=0.3,    
             sig_w=1.0,
             wprogress=10.0, 
-            wheading=3.0,   
-            wsmoothness=5.0,  
-            wtracking=7.5,   
-            wcollision=0.0, 
-            wproximity=0.0, 
+            wheading=3.0,   # Increased to strongly encourage pointing straight along the path
+            wsmoothness=5.0,  # Increased to heavily damp micro-adjustments (twitching) on straights
+            wtracking=5.0,    # Loosened so the robot isn't afraid to leave the path to dodge
+            wcollision=5000.0, # Massive penalty so it dodges even if the obstacle is at the edge of the horizon
+            wproximity=50.0,  # Strong repulsive force field
             v_max=self.get_parameter('v_max').value,
             w_max=self.get_parameter('w_max').value,
             obs_threshold=self.get_parameter('r_safe').value
@@ -311,7 +311,7 @@ class mppinode(Node):
         if self.robot_state is None:
             return
         rx, ry, ryaw = self.robot_state
-        self.scan_pts = laserscan_to_world_frame(msg, rx, ry, ryaw, max_range=3.5, min_range=0.1)
+        self.scan_pts = laserscan_to_world_frame(msg, rx, ry, ryaw, max_range=3.5, min_range=0.20)
 
     def _control_loop(self):
         if self.robot_state is None:
