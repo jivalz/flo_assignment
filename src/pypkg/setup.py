@@ -26,9 +26,10 @@ setup(
         'console_scripts': [
             'teleop = pypkg.teleop:main',
             'wp_collector = pypkg.wp_collector:main',
-            'mppi_node = pypkg.mppi_node:main',
             'mpc_node = pypkg.mpc_node:main',
             'mppi_node1 = pypkg.mppi_node1:main',
+            'mppi_final = pypkg.mppi_final:main',
+            'mppi_demo = pypkg.mppi_demo:main'
         ],
     },
 )

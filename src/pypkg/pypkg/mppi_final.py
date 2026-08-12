@@ -155,7 +155,7 @@ class mppi:
         pts = x_sampled[:,1:,:2].reshape(self.K*self.N, 2)
 
         # Define a local window on the path to prevent snapping to outgoing lanes or crossing paths
-        # At 20 pts/m, a 150 point window covers 7.5 meters, matching the N=150 (7.5s) prediction horizon.
+        # At 20 pts/m, a 50 point window covers 2.5 meters.
         window_start = max(0, current_idx - 10)
         window_end = min(len(self.ref_path.dense_xy), current_idx + 150)
         local_path = self.ref_path.dense_xy[window_start:window_end]
@@ -168,49 +168,37 @@ class mppi:
         current_wtracking = self.wtracking
         current_wheading = self.wheading
         
-        dist_to_obs = float('inf')
         if scans.shape[0] > 0:
+            # Check if there is an obstacle within 1.5 meters of the start position
             current_pos = x_sampled[0, 0, :2].reshape(1, 2)
             dist_to_obs = cdist(current_pos, scans).min()
             if dist_to_obs < 1.5:
                 current_wtracking = self.wtracking * 0.05
                 current_wheading = self.wheading * 0.5
 
-        tx = self.ref_path.dense_tangent_x[closest_idx].reshape(self.K,self.N)
-        ty = self.ref_path.dense_tangent_y[closest_idx].reshape(self.K,self.N)
-
         #trajectory tracking component of cost fxn
         ref_pts = self.ref_path.dense_xy[closest_idx]
-        
         lateral_error = np.sum((pts - ref_pts)**2, axis=1).reshape(self.K,self.N)
         tracking_cost = current_wtracking * np.sum(lateral_error, axis = 1)
 
         #heading err and cost
         yaw = x_sampled[:,1:,2].reshape(self.K, self.N)
+        tx = self.ref_path.dense_tangent_x[closest_idx].reshape(self.K,self.N)
+        ty = self.ref_path.dense_tangent_y[closest_idx].reshape(self.K,self.N)
         
         # Lookahead point for heading (aim at a clear point on the trajectory)
-        # Reduced lookahead from 40 to 20 (1.0m) so it doesn't cut across tight hairpin curves
-        lookahead_idx = np.clip(closest_idx + 40, 0, len(self.ref_path.dense_xy)-1)
+        lookahead_idx = np.clip(closest_idx + 10, 0, len(self.ref_path.dense_xy)-1)
         lookahead_pts = self.ref_path.dense_xy[lookahead_idx]
-        
         dx_target = lookahead_pts[:,0] - pts[:,0]
         dy_target = lookahead_pts[:,1] - pts[:,1]
         path_yaw = np.arctan2(dy_target, dx_target).reshape(self.K, self.N)
-        
         heading_error = wrap_angle(yaw - path_yaw)
         heading_cost = current_wheading * np.sum(heading_error**2,axis = 1)
 
         #progress cost
         dx = x_sampled[:,1:,0] - x_sampled[:,:-1, 0]
         dy = x_sampled[:,1:,1] - x_sampled[:,:-1, 1]
-        
-        if dist_to_obs < 1.5:
-            # Reward absolute movement to encourage wall-following / sliding sideways when forward is blocked
-            movement = np.hypot(dx, dy)
-            progress_perstep = dx*tx + dy*ty + 1.0 * movement
-        else:
-            progress_perstep = dx*tx + dy*ty
-            
+        progress_perstep = dx*tx + dy*ty
         progress_cost = -self.wprogress*np.sum(progress_perstep,axis = 1)
 
         #obstacle collision and proximity cost
@@ -296,14 +284,14 @@ class mppinode(Node):
         self.solver = mppi(
             ref_path=self.ref_path,
             K=450,
-            N=100,  
+            N=150,  
             dt=0.05,
             lambda_=9.0,  
             sig_v=0.3,    
             sig_w=0.3,
             wprogress=40.0, 
             wheading=3.0,   
-            wsmoothness=2.0,  
+            wsmoothness=10.0,  
             wtracking=7.5,   
             wcollision=5000.0, 
             wproximity=10.0, 

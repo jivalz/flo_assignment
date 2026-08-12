@@ -24,7 +24,10 @@ def wrap_angle(angle: np.ndarray):
     return (angle + np.pi) % (2.0 * np.pi) - np.pi
 
 #transform from the lidar frame to world frame(map)
-def laserscan_to_world_frame(scan:LaserScan, rb_x : float,rb_y : float,rb_yaw : float, max_range : float=4.0,min_range : float=0.20,) -> np.ndarray:
+# NOTE: max_range widened 1.0 -> 1.8 (see scan_callback below for the call site).
+# At v_max=0.5 m/s, 1.0m only gave ~2s of warning before contact; 1.8m gives ~3.6s,
+# more in line with the planning horizon, without going as wide as the old 3.5m.
+def laserscan_to_world_frame(scan:LaserScan, rb_x : float,rb_y : float,rb_yaw : float, max_range : float=1.8,min_range : float=0.05,) -> np.ndarray:
     ranges = np.array(scan.ranges , dtype = np.float64)
     angles = scan.angle_min + np.arange(len(ranges)) * scan.angle_increment
     valid = np.isfinite(ranges) & (ranges>=min_range) & (ranges<=max_range)
@@ -93,6 +96,13 @@ class mppi:
         wcollision:float = 100.0, 
         wproximity:float = 10.0, 
         wsmoothness:float = 2.0,
+        wstall:float = 3.0,   # NEW: small direct reward for raw forward speed.
+                               # progress_cost is 0 whenever v=0 (dx=dy=0), which makes
+                               # "stand still and spin" a zero-cost option whenever the
+                               # robot's heading is off from the path -- exactly the
+                               # "look at the wall, yaw left/right, no progress" failure
+                               # mode. This term makes standing still never free, without
+                               # needing to touch tracking/heading/collision weights.
         obs_threshold:float = 0.35,
         sigma_prox:float = 0.5 #soft threshold 
     ):
@@ -111,6 +121,7 @@ class mppi:
         self.wcollision = wcollision
         self.wproximity = wproximity
         self.wsmoothness = wsmoothness
+        self.wstall = wstall
         self.obs_threshold = obs_threshold
         self.sigma_prox = sigma_prox
 
@@ -131,8 +142,8 @@ class mppi:
         epsilon_v = np.random.randn(self.K, self.N)
         epsilon_w = np.random.randn(self.K, self.N)
         #smoothen the noise
-        epsilon_v = gaussian_filter1d(epsilon_v, sigma = 2.0, axis = 1)
-        epsilon_w = gaussian_filter1d(epsilon_w, sigma = 2.0, axis = 1)
+        epsilon_v = gaussian_filter1d(epsilon_v, sigma = 5.0, axis = 1)
+        epsilon_w = gaussian_filter1d(epsilon_w, sigma = 10.0, axis = 1)
         
         # Rescale noise back to desired standard deviations so it actually explores!
         epsilon_v = (epsilon_v / (np.std(epsilon_v) + 1e-8)) * self.sig_v
@@ -155,26 +166,52 @@ class mppi:
         pts = x_sampled[:,1:,:2].reshape(self.K*self.N, 2)
 
         # Define a local window on the path to prevent snapping to outgoing lanes or crossing paths
-        # At 20 pts/m, a 50 point window covers 2.5 meters.
+        # At 20 pts/m, a 150 point window covers 7.5 meters, matching the N=150 (7.5s) prediction horizon.
         window_start = max(0, current_idx - 10)
-        window_end = min(len(self.ref_path.dense_xy), current_idx + 50)
+        window_end = min(len(self.ref_path.dense_xy), current_idx + 150)
         local_path = self.ref_path.dense_xy[window_start:window_end]
         
         # Fast local search using cdist instead of instantiating a new KDTree
         dists = cdist(pts, local_path)
         closest_idx = np.argmin(dists, axis=1) + window_start
 
-        #trajectory tracking component of cost fxn
-        ref_pts = self.ref_path.dense_xy[closest_idx]
-        lateral_error = np.sum((pts - ref_pts)**2, axis=1).reshape(self.K,self.N)
-        tracking_cost = self.wtracking * np.sum(lateral_error, axis = 1)
+        # Dynamically reduce tracking and heading weights if an obstacle is detected nearby
+        current_wtracking = self.wtracking
+        current_wheading = self.wheading
+        
+        dist_to_obs = float('inf')
+        if scans.shape[0] > 0:
+            current_pos = x_sampled[0, 0, :2].reshape(1, 2)
+            dist_to_obs = cdist(current_pos, scans).min()
 
-        #heading err and cost
-        yaw = x_sampled[:,1:,2].reshape(self.K, self.N)
         tx = self.ref_path.dense_tangent_x[closest_idx].reshape(self.K,self.N)
         ty = self.ref_path.dense_tangent_y[closest_idx].reshape(self.K,self.N)
-        path_yaw = np.arctan2(ty,tx)
-        heading_error = wrap_angle(yaw - path_yaw)
+
+        #trajectory tracking component of cost fxn
+        ref_pts = self.ref_path.dense_xy[closest_idx]
+        
+        lateral_dist = np.linalg.norm(pts - ref_pts, axis=1).reshape(self.K,self.N)
+        if dist_to_obs < 1.5:
+            # Deadband: Allow up to 1.5 meters of lateral freedom to detour around obstacles
+            lateral_dist = np.maximum(0.0, lateral_dist - 1.5)
+            
+        tracking_cost = self.wtracking * np.sum(lateral_dist**2, axis = 1)
+        
+        #heading err and cost
+        yaw = x_sampled[:,1:,2].reshape(self.K, self.N)
+        
+        # Lookahead point for heading (aim at a clear point on the trajectory)
+        lookahead_idx = np.clip(closest_idx + 20, 0, len(self.ref_path.dense_xy)-1)
+        lookahead_pts = self.ref_path.dense_xy[lookahead_idx]
+        dx_target = lookahead_pts[:,0] - pts[:,0]
+        dy_target = lookahead_pts[:,1] - pts[:,1]
+        path_yaw = np.arctan2(dy_target, dx_target).reshape(self.K, self.N)
+        
+        heading_error = np.abs(wrap_angle(yaw - path_yaw))
+        if dist_to_obs < 1.5:
+            # Deadband: Allow up to 45 degrees (0.78 rad) of heading freedom to detour
+            heading_error = np.maximum(0.0, heading_error - 0.78)
+            
         heading_cost = self.wheading * np.sum(heading_error**2,axis = 1)
 
         #progress cost
@@ -182,6 +219,15 @@ class mppi:
         dy = x_sampled[:,1:,1] - x_sampled[:,:-1, 1]
         progress_perstep = dx*tx + dy*ty
         progress_cost = -self.wprogress*np.sum(progress_perstep,axis = 1)
+
+        # NEW: anti-stall term. progress_cost above is 0 whenever v=0 (dx=dy=0), which
+        # makes "stand still and spin" a genuine zero-cost option whenever heading is
+        # off from the path -- e.g. staring at a wall dead-ahead. This rewards raw
+        # forward speed directly, independent of tangent alignment, so standing still
+        # is never free. Kept small relative to wprogress/wtracking/wcollision so it
+        # doesn't override legitimate slow-down-for-safety behavior near obstacles.
+        v_cmd_perstep = u_sampled[:, :, 0]
+        stall_cost = -self.wstall * np.sum(v_cmd_perstep, axis=1)
 
         #obstacle collision and proximity cost
         if scans.shape[0] > 0:
@@ -200,7 +246,7 @@ class mppi:
         smoothness_cost = self.wsmoothness * (np.sum(u_diff**2, axis= (1,2)))
 
         #total cost
-        final_cost = tracking_cost + heading_cost + progress_cost + collision_cost + proximity_cost + smoothness_cost
+        final_cost = tracking_cost + heading_cost + progress_cost + stall_cost + collision_cost + proximity_cost + smoothness_cost
         return final_cost
     
     def solve(self,x0:np.ndarray,scans:np.ndarray):
@@ -240,7 +286,7 @@ class mppinode(Node):
         self.declare_parameter('r_safe', 0.35)
         wp_file = self.get_parameter('waypoint_file').value
         if not wp_file:
-            wp_file = os.path.expanduser('~/assignment/src/nav/waypoints/waypoint4.csv')
+            wp_file = os.path.expanduser('~/assignment/src/nav/waypoints/waypoint5.csv')
             # if not os.path.exists(wp_file):
             #     wp_file = os.path.expanduser('~/assignment/src/nav/waypoints/waypoint4.csv')
 
@@ -265,18 +311,19 @@ class mppinode(Node):
         # Initialize MPPI Solver
         self.solver = mppi(
             ref_path=self.ref_path,
-            K=500,
-            N=50,  
+            K=450,
+            N=100,  
             dt=0.05,
-            lambda_=0.1,  
+            lambda_=9.0,  
             sig_v=0.3,    
-            sig_w=1.0,
-            wprogress=10.0, 
+            sig_w=0.3,
+            wprogress=40.0, 
             wheading=3.0,   
-            wsmoothness=5.0,  
+            wsmoothness=10.0,  
             wtracking=7.5,   
-            wcollision=0.0, 
-            wproximity=0.0, 
+            wcollision=5000.0, 
+            wproximity=10.0, 
+            wstall=10.0,       # NEW -- increased to allow dodging on N=100
             v_max=self.get_parameter('v_max').value,
             w_max=self.get_parameter('w_max').value,
             obs_threshold=self.get_parameter('r_safe').value
@@ -311,7 +358,8 @@ class mppinode(Node):
         if self.robot_state is None:
             return
         rx, ry, ryaw = self.robot_state
-        self.scan_pts = laserscan_to_world_frame(msg, rx, ry, ryaw, max_range=3.5, min_range=0.1)
+        # max_range widened 1.0 -> 1.8 (see comment on laserscan_to_world_frame above)
+        self.scan_pts = laserscan_to_world_frame(msg, rx, ry, ryaw, max_range=1.8, min_range=0.1)
 
     def _control_loop(self):
         if self.robot_state is None:
