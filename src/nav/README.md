@@ -1,229 +1,169 @@
-# Autonomous Navigation with Regulated Pure Pursuit
+# FLO Assignment — MPPI Path Tracking & Obstacle Avoidance
 
-A ROS2-based navigation stack implementing path smoothing and regulated pure pursuit control for differential drive robots in constrained environments. [Video](https://drive.google.com/file/d/17OE4Cf4g9UPwNrmvYiQqMd2OCQQHhMXT/view?usp=sharing)
+A ROS 2 Humble autonomous navigation stack for TurtleBot3 using **Model Predictive Path Integral (MPPI)** control with real-time obstacle avoidance in Gazebo.
 
-## Overview
+---
 
-This package addresses the challenge of converting discrete waypoints from a global planner into smooth, dynamically-feasible trajectories while ensuring accurate tracking with adaptive velocity regulation.
+## Prerequisites
 
-### Key Features
+- **Ubuntu 22.04** with **ROS 2 Humble**
+- **TurtleBot3 packages** (`turtlebot3`, `turtlebot3_simulations`)
+- **Gazebo Classic**
+- **Python 3.10+** with `numpy`, `scipy`
+- A **PS4 controller** (optional, for teleop waypoint collection)
 
-- **Path Smoothing**: Converts discrete waypoints into continuous trajectories with rounded corners
-- **Regulated Pure Pursuit**: Adaptive velocity control based on path curvature and proximity to obstacles
-- **Dynamic Obstacle Avoidance**: Real-time laser scan integration for collision prevention
-- **Velocity Scaling**: Automatic speed reduction at sharp turns and near goal positions
-- **Tight Space Navigation**: Suitable for confined environments with dynamic obstacles
-
-## Problem Statement
-
-Mobile robots typically receive coarse paths consisting of discrete waypoints from global planners. Direct execution of these waypoints results in:
-- Jerky, non-smooth motion
-- Potential collision risks at sharp corners
-- Inefficient velocity profiles
-- Poor trajectory tracking accuracy
-
-This implementation solves these issues through:
-1. **Path Refinement**: Smoothing discrete waypoints into continuous trajectories
-2. **Adaptive Control**: Regulating velocity based on local path geometry and obstacles
-3. **Safe Navigation**: Real-time obstacle detection and avoidance
-
-## Architecture
-
-```
-┌─────────────────┐
-│   Waypoints     │
-│   (CSV File)    │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────────────┐
-│  Path Smoother Node     │
-│  - Bézier interpolation │
-│  - Corner rounding      │
-└──────────┬──────────────┘
-           │ /path (nav_msgs/Path)
-           ▼
-┌──────────────────────────────┐
-│  Pure Pursuit Controller     │
-│  - Lookahead calculation     │
-│  - Curvature-based scaling   │
-│  - Obstacle detection        │
-└──────────┬───────────────────┘
-           │ /cmd_vel
-           ▼
-┌──────────────────┐
-│  Differential    │
-│  Drive Robot     │
-└──────────────────┘
-```
-
-## Algorithm Details
-
-### Path Smoothing
-
-The smoother applies Bézier curve interpolation at waypoint corners:
-- Detects sharp angles between consecutive segments
-- Inserts quadratic Bézier curves with configurable radius
-- Maintains path connectivity and resolution
-- Preserves start and end points
-
-### Regulated Pure Pursuit
-
-Standard pure pursuit enhanced with:
-
-**Curvature-Based Velocity Regulation**
-```
-v = v_desired × min(1.0, r_min/r_current)
-```
-Where `r` is the path curvature radius
-
-**Approach Velocity Scaling**
-```
-v = v × min(1.0, d_goal/d_scaling)
-```
-Smoothly decelerates as the robot approaches the goal
-
-**Adaptive Lookahead Distance**
-```
-L_d = clamp(v × t_lookahead, L_min, L_max)
-```
-Velocity-scaled lookahead for stable tracking
-
-**Rotate-to-Heading**
-- Triggers in-place rotation when heading error exceeds threshold
-- Prevents lateral drift at sharp corners
-
-**Obstacle Detection**
-- 120° frontal scan coverage (-60° to +60°)
-- 0.5m detection threshold
-- Immediate stop-and-wait behavior
+---
 
 ## Installation
 
 ```bash
-cd ~/ros2_ws/src
-git clone https://github.com/manojkarnekar/smoothing-rpp.git nav
-cd ~/ros2_ws
+# Clone the repository
+cd ~
+git clone https://github.com/<your-username>/flo_assignment.git
+cd flo_assignment
+
+# Build the workspace
 colcon build --symlink-install
 source install/setup.bash
+
+# Set TurtleBot3 model (add to ~/.bashrc for persistence)
+export TURTLEBOT3_MODEL=burger
 ```
 
-## Usage
+> **Note:** Run `source install/setup.bash` in every new terminal, or add it to your `~/.bashrc`.
 
-### 1. Launch Simulation Environment
+---
 
-**Terminal 1:**
+## Quick Start
+
+### Step 1 — Launch Gazebo + RViz
+
+Open **Terminal 1**:
+
 ```bash
 export TURTLEBOT3_MODEL=burger
 ros2 launch nav sim_bringup.py
 ```
 
 This launches:
-- Gazebo with empty world
-- TurtleBot3 model
-- Pure pursuit controller
-- RViz2 visualization
+- Gazebo with an empty world and the TurtleBot3 Burger
+- RViz2 with pre-configured visualization for MPPI rollouts, optimal path, and reference path
 
-**Add obstacles in Gazebo** after launch for testing dynamic avoidance.
+> **Tip:** To add obstacles, use the Gazebo toolbar: `Insert` → choose a model (cylinder, box, etc.) → click to place it in the world.
 
-### 2. Start Path Smoother
+---
 
-**Terminal 2:**
+### Step 2 — Record Waypoints (First Time Only)
+
+If you need to create a new waypoint track, use the **PS4 Teleop** + **Waypoint Collector** workflow.
+
+#### 2a. Start the PS4 Teleop Node
+
+Open **Terminal 2**:
+
 ```bash
-ros2 run nav smoothing
+ros2 run pypkg teleop
 ```
 
-Loads waypoints from CSV, generates smooth trajectory, and publishes:
+**PS4 Controller Mapping:**
+| Button / Stick | Action |
+|---|---|
+| Left Stick Y-axis | Forward / Backward |
+| Right Stick X-axis | Turn Left / Right |
+| L1 / R1 | Decrease / Increase linear speed |
+| L2 / R2 | Decrease / Increase angular speed |
 
-- Original waypoints to /waypoints (visualized in red in RViz)
-- Smoothed trajectory to /path (visualized in green in RViz)
+> **Note:** If the PS4 controller is not connected, the node will wait for input. Make sure the controller is paired via Bluetooth or USB before launching.
 
-## Configuration
+#### 2b. Start the Waypoint Collector
 
-### Waypoint File Format
+Open **Terminal 3**:
 
-`waypoints/waypoint.csv`:
-```csv
-0.0,0.0
-1.0,0.0
-1.0,1.0
-2.0,1.0
+```bash
+ros2 run pypkg wp_collector
 ```
 
-### Key Parameters
+This will automatically:
+1. Create a new `waypointN.csv` file in `src/nav/waypoints/` (auto-incrementing filename)
+2. Record the robot's `(x, y)` position from `/odom` every time it moves more than `0.1m`
+3. Save the waypoints on shutdown (`Ctrl+C`)
 
-**Path Smoother** (`smoothing` node):
-- `path_resolution`: Interpolation resolution (default: 0.1m)
-- `path_file`: CSV waypoint file path
-- `frame_id`: TF frame for path (default: "odom")
+**Custom filename:**
+```bash
+ros2 run pypkg wp_collector --ros-args -p file_name:=my_track
+```
 
-**Pure Pursuit** (`pure_pursuit_tracker` node):
-- `desired_linear_vel`: Target velocity (default: 0.3 m/s)
-- `lookahead_time`: Lookahead time horizon (default: 1.5s)
-- `min_lookahead_distance`: Minimum lookahead (default: 0.3m)
-- `max_lookahead_distance`: Maximum lookahead (default: 0.9m)
-- `regulated_linear_scaling_min_radius`: Curvature regulation threshold (default: 0.9m)
-- `velocity_scaling_distance`: Goal approach distance (default: 0.5m)
-- `rotate_to_heading_min_angle`: In-place rotation threshold (default: 0.785 rad)
+Now drive the robot around the track with your PS4 controller. When done, press `Ctrl+C` in the waypoint collector terminal to save.
 
-## Topics
+---
 
-| Topic | Type | Description |
-|-------|------|-------------|
-| `/path` | nav_msgs/Path | Smoothed trajectory |
-| `/waypoints` | nav_msgs/Path | Original waypoints |
-| `/cmd_vel` | geometry_msgs/Twist | Velocity commands |
-| `/scan` | sensor_msgs/LaserScan | Laser scan data |
-| `/odom` | nav_msgs/Odometry | Robot odometry |
-| `/pure_pursuit/lookahead_point` | geometry_msgs/PointStamped | Current lookahead point |
+### Step 3 — Run the MPPI Controller
 
-## Behavior Characteristics
+Open **Terminal 2** (or a new terminal):
 
-### Smooth Motion
-- Continuous velocity profiles without sudden changes
-- Gradual acceleration/deceleration based on curvature
-- No oscillations or overshoot at waypoints
+```bash
+ros2 run pypkg mppi_final
+```
 
-### Tight Space Navigation
-- Automatic speed reduction in narrow passages
-- Stop-and-wait for dynamic obstacles
-- Maintains safe clearance from obstacles
+The robot will:
+1. Load the waypoint CSV file
+2. Generate a smooth cubic spline reference path
+3. Begin autonomous path tracking using the MPPI solver
+4. Dynamically avoid obstacles detected by the LiDAR
 
-### Robustness
-- Handles missed TF lookups gracefully
-- Path preemption support for replanning
-- Goal tolerance checking with configurable thresholds
+**To use a specific waypoint file:**
+```bash
+ros2 run pypkg mppi_final --ros-args -p waypoint_file:=/path/to/your/waypoints.csv
+```
 
-## Performance
+---
 
-Typical performance metrics:
-- Path tracking error: < 0.1m (straight segments)
-- Goal reaching accuracy: < 0.2m
-- Obstacle detection latency: < 50ms
-- Control loop frequency: 30 Hz
+## Waypoint Files
 
-## Future Enhancements
+Pre-recorded tracks are stored in `src/nav/waypoints/`:
 
-- Trajectory optimization with time-optimal velocity profiles
-- Model Predictive Control (MPC) for tighter tracking
-- Dynamic window approach integration
-- Multi-resolution path smoothing
-- Recovery behaviors for stuck scenarios
+| File | Description |
+|---|---|
+| `waypoint1.csv` | Basic straight-line test |
+| `waypoint2.csv` | Simple curved path |
+| `waypoint3.csv` | Complex track with sharp turns |
+| `waypoint4.csv` | Long track with multiple segments |
+| `waypoint5.csv` | Full obstacle avoidance test track |
 
-## Dependencies
+---
 
-- ROS2 Humble
-- TurtleBot3 packages
-- Gazebo Classic
-- RViz2
-- tf2_ros
-- sensor_msgs
-- nav_msgs
-- geometry_msgs
+## RViz Visualization
 
-## License
+| Topic | Color | Description |
+|---|---|---|
+| `/mppi/ref_path` | Blue | Reference path (cubic spline) |
+| `/mppi/optimal_path` | Green | Best trajectory from current solve |
+| `/mppi/rollouts` | Light Green (transparent) | Fan of 40 candidate rollout trajectories |
+| `/cmd_vel` | — | Velocity commands sent to the robot |
 
+---
 
-## Author
+## Test Case Videos
 
-Manoj K
+### Case 1 — Straight Line Tracking
+[▶️ Watch on YouTube](https://youtu.be/84PZYuvF5mA)
+
+---
+
+### Case 2 — Sharp Turns & Curves
+[▶️ Watch on YouTube](https://youtu.be/eGq0YXwQRmg)
+
+---
+
+### Case 3 — Full Track Completion
+[▶️ Watch on YouTube](https://youtu.be/5_h0AVIYMv4)
+
+---
+
+### Case 4 — Static Obstacle Avoidance
+[▶️ Watch on YouTube](https://youtu.be/i1TQzU3h8PI)
+
+---
+
+### Dynamic Obstacle Avoidance
+[▶️ Watch on YouTube](https://youtu.be/fjrjhM7Xo4k)
