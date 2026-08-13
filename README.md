@@ -75,16 +75,16 @@ To add obstacles during runtime, use the Gazebo toolbar: `Insert` → choose a m
 
 ## Test Case Videos
 
-### Case 1 — Straight Line Tracking
+### Case 1 — Wall of cubes
 [▶️ Watch on YouTube](https://youtu.be/84PZYuvF5mA)
 
-### Case 2 — Sharp Turns & Curves
+### Case 2 — Queue of cubes
 [▶️ Watch on YouTube](https://youtu.be/eGq0YXwQRmg)
 
-### Case 3 — Full Track Completion
+### Case 3 — T shaped obstacle
 [▶️ Watch on YouTube](https://youtu.be/5_h0AVIYMv4)
 
-### Case 4 — Static Obstacle Avoidance
+### Case 4 — Complex trajectory
 [▶️ Watch on YouTube](https://youtu.be/i1TQzU3h8PI)
 
 ### Dynamic Obstacle Avoidance
