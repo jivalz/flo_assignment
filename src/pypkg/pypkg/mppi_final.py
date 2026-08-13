@@ -11,6 +11,7 @@ import os
 import csv
 import math 
 import numpy as np
+from ament_index_python.packages import get_package_share_directory
 from scipy.interpolate import CubicSpline
 from scipy.spatial import cKDTree
 from scipy.spatial.distance import cdist
@@ -186,12 +187,8 @@ class mppi:
         tx = self.ref_path.dense_tangent_x[closest_idx].reshape(self.K,self.N)
         ty = self.ref_path.dense_tangent_y[closest_idx].reshape(self.K,self.N)
         
-        # Lookahead point for heading (aim at a clear point on the trajectory)
-        lookahead_idx = np.clip(closest_idx + 10, 0, len(self.ref_path.dense_xy)-1)
-        lookahead_pts = self.ref_path.dense_xy[lookahead_idx]
-        dx_target = lookahead_pts[:,0] - pts[:,0]
-        dy_target = lookahead_pts[:,1] - pts[:,1]
-        path_yaw = np.arctan2(dy_target, dx_target).reshape(self.K, self.N)
+        # Use path tangent for heading target instead of a lookahead point. 
+        path_yaw = np.arctan2(ty, tx).reshape(self.K, self.N)
         heading_error = wrap_angle(yaw - path_yaw)
         heading_cost = current_wheading * np.sum(heading_error**2,axis = 1)
 
@@ -248,7 +245,6 @@ class mppinode(Node):
     def __init__(self):
         super().__init__('mppi_node')
         
-        # VERY IMPORTANT: Enable sim time so our timestamps match Gazebo and RViz!
         self.set_parameters([rclpy.parameter.Parameter('use_sim_time', rclpy.Parameter.Type.BOOL, True)])
         
         self.declare_parameter('waypoint_file', '')
@@ -258,9 +254,13 @@ class mppinode(Node):
         self.declare_parameter('r_safe', 0.35)
         wp_file = self.get_parameter('waypoint_file').value
         if not wp_file:
-            wp_file = os.path.expanduser('~/assignment/src/nav/waypoints/waypoint5.csv')
-            # if not os.path.exists(wp_file):
-            #     wp_file = os.path.expanduser('~/assignment/src/nav/waypoints/waypoint4.csv')
+            try:
+                nav_share_dir = get_package_share_directory('nav')
+                wp_file = os.path.join(nav_share_dir, 'waypoints', 'waypoint4.csv')
+            except Exception as e:
+                self.get_logger().error(f"Could not find 'nav' package share directory: {e}")
+                # Fallback to local path if not installed
+                wp_file = os.path.expanduser('~/flo_assignment/src/nav/waypoints/waypoint4.csv')
 
         try:
             waypoints = []
@@ -280,7 +280,7 @@ class mppinode(Node):
             self.get_logger().error(f"Failed to load waypoints from '{wp_file}': {e}")
             raise e
 
-        # Initialize MPPI Solver
+        #init mppi with weights
         self.solver = mppi(
             ref_path=self.ref_path,
             K=450,
@@ -300,21 +300,17 @@ class mppinode(Node):
             obs_threshold=self.get_parameter('r_safe').value
         )
 
-        # State Variables
         self.robot_state = None  # [x, y, yaw]
         self.scan_pts = np.empty((0, 2))
 
-        # Publishers
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.opt_path_pub = self.create_publisher(Path, '/mppi/optimal_path', 10)
         self.ref_path_pub = self.create_publisher(Path, '/mppi/ref_path', 10)
         self.rollouts_pub = self.create_publisher(MarkerArray, '/mppi/rollouts', 10)
 
-        # Subscribers
         self.create_subscription(Odometry, '/odom', self._odom_callback, 10)
         self.create_subscription(LaserScan, '/scan', self._scan_callback, 10)
 
-        # Control Loop Timer
         rate = self.get_parameter('control_rate').value
         self.create_timer(1.0 / rate, self._control_loop)
         self.create_timer(2.0, self._publish_reference_path)
@@ -335,23 +331,20 @@ class mppinode(Node):
         if self.robot_state is None:
             return
 
-        # Solve MPPI optimization problem
         v_cmd, w_cmd, x_opt, x_rollouts = self.solver.solve(self.robot_state, self.scan_pts)
 
-        # Publish velocity command to robot
         cmd = Twist()
         cmd.linear.x = v_cmd
         cmd.angular.z = w_cmd
         self.get_logger().info(f"Publishing: v={v_cmd:.3f}, w={w_cmd:.3f}")
         self.cmd_pub.publish(cmd)
 
-        # Publish RViz Visualizations
         self._publish_visualizations(x_opt, x_rollouts)
 
     def _publish_visualizations(self, x_opt: np.ndarray, x_rollouts: np.ndarray):
         stamp = self.get_clock().now().to_msg()
 
-        # 1. Publish Optimal Path Trajectory
+        #optimal trajec publish
         opt_msg = Path()
         opt_msg.header.stamp = stamp
         opt_msg.header.frame_id = 'odom'
@@ -363,7 +356,7 @@ class mppinode(Node):
             opt_msg.poses.append(ps)
         self.opt_path_pub.publish(opt_msg)
 
-        # 2. Publish Candidate Trajectory Rollouts as RViz Markers
+        #rollout publish
         ma = MarkerArray()
         m = Marker()
         m.header.stamp = stamp
@@ -371,8 +364,8 @@ class mppinode(Node):
         m.id = 0
         m.type = Marker.LINE_LIST
         m.action = Marker.ADD
-        m.scale.x = 0.01  # Thin line width
-        m.color.a = 0.15  # Semi-transparent green
+        m.scale.x = 0.01 
+        m.color.a = 0.15
         m.color.g = 1.0
 
         for k in range(x_rollouts.shape[0]):

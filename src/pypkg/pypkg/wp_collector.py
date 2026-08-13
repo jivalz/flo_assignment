@@ -6,7 +6,16 @@ import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
 
-DEFAULT_DIR = os.path.expanduser("~/assignment/src/nav/waypoints")
+try:
+    from ament_index_python.packages import get_package_share_directory
+    nav_share_dir = get_package_share_directory('nav')
+    if '/install/' in nav_share_dir:
+        ws_root = nav_share_dir.split('/install/')[0]
+        DEFAULT_DIR = os.path.join(ws_root, 'src', 'nav', 'waypoints')
+    else:
+        DEFAULT_DIR = os.path.expanduser("~/flo_assignment/src/nav/waypoints")
+except Exception:
+    DEFAULT_DIR = os.path.expanduser("~/flo_assignment/src/nav/waypoints")
 
 def get_next_waypoint_file(output_dir: str) -> str:
     os.makedirs(output_dir, exist_ok=True)

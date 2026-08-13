@@ -212,9 +212,9 @@ class BasicMPCNode(Node):
 
         wp_file = self.get_parameter('waypoint_file').value
         if not wp_file:
-            wp_file = os.path.expanduser('~/assignment/src/pypkg/csv/waypoint3.csv')
+            wp_file = os.path.expanduser('~/flo_assignment/src/pypkg/csv/waypoint4.csv')
             if not os.path.exists(wp_file):
-                wp_file = os.path.expanduser('~/assignment/src/nav/waypoints/waypoint3.csv')
+                wp_file = os.path.expanduser('~/flo_assignment/src/nav/waypoints/waypoint4.csv')
 
         try:
             pts = []
